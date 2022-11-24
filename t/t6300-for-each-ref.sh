@@ -1446,4 +1446,141 @@ sig_crlf="$(printf "%s" "$sig" | append_cr; echo dummy)"
 sig_crlf=${sig_crlf%dummy}
 test_atom refs/tags/fake-sig-crlf contents:signature "$sig_crlf"
 
+test_expect_success GPG 'test bare signature atom' '
+	git checkout -b signed &&
+    echo 1 >file && git add file &&
+    test_tick && git commit -S -m initial &&
+    git verify-commit signed 2>out &&
+    head -3 out >expected &&
+    tail -1 out >>expected &&
+    echo >>expected &&
+    git for-each-ref refs/heads/signed --format="%(signature)" >actual &&
+    test_cmp actual expected
+'
+
+test_expect_success GPG 'test signature atom with grade option' '
+	git verify-commit signed 2>out &&
+	if ! [ grep "Good signature from" out ]; then
+		echo "G" >expected
+	else
+		echo "B" >expected
+	fi &&
+	git for-each-ref refs/heads/signed --format="%(signature:grade)" >actual &&
+	test_cmp actual expected
+'
+
+test_expect_success GPG 'test signature atom with grade option and good signature' '
+	git verify-commit signed 2>out &&
+	grep "Good signature from" out &&
+	echo "G" >expected &&
+	git for-each-ref refs/heads/signed --format="%(signature:grade)" >actual &&
+	test_cmp actual expected
+'
+
+test_expect_success GPG 'test signature atom with signer option' '
+	git verify-commit signed 2>out &&
+	grep -oP "\"(.*?)\"" out | tail -1 | sed "s/\"//g" >expected &&
+	git for-each-ref refs/heads/signed --format="%(signature:signer)" >actual &&
+	test_cmp actual expected
+'
+
+test_expect_success GPG 'test signature atom with key option' '
+	git verify-commit signed 2>out &&
+	grep "key" out | grep -oP "[a-zA-Z0-9]{40}" | cut -c 25- >expected &&
+	git for-each-ref refs/heads/signed --format="%(signature:key)" >actual &&
+	test_cmp actual expected
+'
+
+test_expect_success GPG 'test signature atom with fingerprint option' '
+	git verify-commit signed 2>out &&
+	grep "key" out | grep -oP "[a-zA-Z0-9]{40}" >expected &&
+	git for-each-ref refs/heads/signed --format="%(signature:fingerprint)" >actual &&
+	test_cmp actual expected
+'
+
+test_expect_success GPG 'test signature atom with primarykeyfingerprint option' '
+	git verify-commit signed 2>out &&
+	grep "key" out | grep -oP "[a-zA-Z0-9]{40}" >expected &&
+	git for-each-ref refs/heads/signed --format="%(signature:primarykeyfingerprint)" >actual &&
+	test_cmp actual expected
+'
+
+test_expect_success GPG 'test signature atom with trustlevel option' '
+	git verify-commit signed 2>out &&
+	grep "Good signature from" out | grep -oP "\[.*?\]" | sed "s/[][]//g" >expected &&
+	git for-each-ref refs/heads/signed --format="%(signature:trustlevel)" >actual &&
+	test_cmp actual expected
+'
+
+test_expect_success GPG 'show good signature with custom format' '
+	cat >expect <<-\EOF &&
+	G
+	13B6F51ECDDE430D
+	C O Mitter <committer@example.com>
+	73D758744BE721698EC54E8713B6F51ECDDE430D
+	73D758744BE721698EC54E8713B6F51ECDDE430D
+	EOF
+	git for-each-ref refs/heads/signed --format="%(signature:grade)%0a%(signature:key)%0a%(signature:signer)%0a%(signature:fingerprint)%0a%(signature:primarykeyfingerprint)" >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success GPG 'show untrusted signature with custom format' '
+	echo 2 >file && test_tick && git commit -a -m second -SB7227189 &&
+	git tag signed-second &&
+	cat >expect <<-\EOF &&
+	U
+	65A0EEA02E30CAD7
+	Eris Discordia <discord@example.net>
+	F8364A59E07FFE9F4D63005A65A0EEA02E30CAD7
+	D4BE22311AD3131E5EDA29A461092E85B7227189
+	EOF
+	git for-each-ref refs/tags/signed-second --format="%(signature:grade)%0a%(signature:key)%0a%(signature:signer)%0a%(signature:fingerprint)%0a%(signature:primarykeyfingerprint)" >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success GPG 'show untrusted signature with undefined trust level' '
+	cat >expect <<-\EOF &&
+	undefined
+	65A0EEA02E30CAD7
+	Eris Discordia <discord@example.net>
+	F8364A59E07FFE9F4D63005A65A0EEA02E30CAD7
+	D4BE22311AD3131E5EDA29A461092E85B7227189
+	EOF
+	git for-each-ref refs/tags/signed-second --format="%(signature:trustlevel)%0a%(signature:key)%0a%(signature:signer)%0a%(signature:fingerprint)%0a%(signature:primarykeyfingerprint)" >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success GPG 'show lack of signature with custom format' '
+	echo 7 >file && test_tick && git commit -a -m "not signed" --no-gpg-sign &&
+	git tag unsigned &&
+
+	cat >expect <<-\EOF &&
+	No signature
+	No signature
+	No signature
+	No signature
+	No signature
+	EOF
+	git for-each-ref refs/tags/unsigned --format="%(signature:trustlevel)%0a%(signature:key)%0a%(signature:signer)%0a%(signature:fingerprint)%0a%(signature:primarykeyfingerprint)" >actual &&
+	test_cmp expect actual
+'
+
+test_expect_success GPG 'test signature atom with grade option and bad signature' '
+	git config commit.gpgsign true &&
+	echo 4 >file && test_tick && git commit -a -m "fourth" --no-gpg-sign &&
+	git tag fourth-unsigned &&
+
+	test_tick && git rebase -f HEAD^^ && git tag third-signed HEAD^ &&
+	git tag fourth-signed &&
+
+	git cat-file commit fourth-signed >raw &&
+	sed -e "s/^fourth/4th forged/" raw >forged1 &&
+	git hash-object -w -t commit forged1 >forged1.commit &&
+	test_must_fail git verify-commit $(cat forged1.commit) &&
+	
+	echo "B" >expect &&
+	git for-each-ref refs/tags/forged1.commit --format="%(signature:grade)" >actual &&
+	test_cmp expect actual
+'
+
 test_done
